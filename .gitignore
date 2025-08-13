@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+.vercel
+*.log
+.DS_Store
+.vscode/
+dist/
+build/
+client/
+server/

@@ -1,0 +1,1314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube DJ Mixer - Complete</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://www.youtube.com/iframe_api"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .slider {
+            appearance: none;
+            background: #ddd;
+            outline: none;
+            border-radius: 2px;
+            height: 6px;
+        }
+        .slider::-webkit-slider-thumb {
+            appearance: none;
+            width: 12px;
+            height: 12px;
+            background: #000;
+            cursor: pointer;
+            border-radius: 2px;
+        }
+        .slider::-moz-range-thumb {
+            width: 12px;
+            height: 12px;
+            background: #000;
+            cursor: pointer;
+            border-radius: 2px;
+            border: none;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .spinning {
+            animation: spin 2s linear infinite;
+        }
+        body {
+            overflow-x: auto;
+            min-width: 1400px;
+        }
+        .effects-working {
+            border: 2px solid #10b981;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+        }
+        .proxy-mode {
+            background: linear-gradient(135deg, #10b981, #059669);
+        }
+        .effect-enabled {
+            background: #10b981;
+            color: white;
+        }
+        .effect-disabled {
+            background: #6b7280;
+            color: white;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-mono">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // Configuration
+        const PROXY_SERVER = window.location.origin;
+        const USE_PROXY_EFFECTS = true;
+
+        // Icons
+        const PlayIcon = () => (
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z"/>
+            </svg>
+        );
+
+        const PauseIcon = () => (
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+            </svg>
+        );
+
+        const XIcon = () => (
+            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+            </svg>
+        );
+
+        const YouTubeDJMixer = () => {
+            // State management
+            const [leftQueue, setLeftQueue] = useState([]);
+            const [rightQueue, setRightQueue] = useState([]);
+            const [currentTrack, setCurrentTrack] = useState({ left: 0, right: 0 });
+            const [leftControls, setLeftControls] = useState({
+                volume: 75, high: 50, mid: 50, low: 50, pitch: 50
+            });
+            const [rightControls, setRightControls] = useState({
+                volume: 75, high: 50, mid: 50, low: 50, pitch: 50
+            });
+            const [crossfader, setCrossfader] = useState(50);
+            const [effects, setEffects] = useState({ 
+                flanger: 0, phaser: 0, chorus: 0, bitcrusher: 0,
+                gate: 0, autoPan: 0, stutter: 0, granularDelay: 0,
+                spectralFilter: 0, tapeStop: 0, reverse: 0, beatRepeat: 0
+            });
+            const [effectsEnabled, setEffectsEnabled] = useState({
+                flanger: false, phaser: false, chorus: false, bitcrusher: false,
+                gate: false, autoPan: false, stutter: false, granularDelay: false,
+                spectralFilter: false, tapeStop: false, reverse: false, beatRepeat: false
+            });
+            const [isPlaying, setIsPlaying] = useState({ left: false, right: false });
+            const [proxyMode, setProxyMode] = useState(USE_PROXY_EFFECTS);
+            const [serverStatus, setServerStatus] = useState('unknown');
+            
+            // Audio contexts and nodes
+            const [leftAudioContext, setLeftAudioContext] = useState(null);
+            const [rightAudioContext, setRightAudioContext] = useState(null);
+            const [leftNodes, setLeftNodes] = useState({});
+            const [rightNodes, setRightNodes] = useState({});
+            
+            // YouTube player refs
+            const leftPlayerRef = useRef(null);
+            const rightPlayerRef = useRef(null);
+            const leftAudioRef = useRef(null);
+            const rightAudioRef = useRef(null);
+
+            // Test proxy server connection on startup
+            useEffect(() => {
+                const testConnection = async () => {
+                    try {
+                        const response = await fetch(`${PROXY_SERVER}/`);
+                        if (response.ok) {
+                            setServerStatus('connected');
+                        } else {
+                            setServerStatus('error');
+                        }
+                    } catch (error) {
+                        setServerStatus('offline');
+                        console.warn('Proxy server offline, using basic mode');
+                    }
+                };
+                testConnection();
+            }, []);
+
+            // Initialize Audio Contexts for Web Audio API
+            useEffect(() => {
+                if (proxyMode && serverStatus === 'connected') {
+                    const leftCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    const rightCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    setLeftAudioContext(leftCtx);
+                    setRightAudioContext(rightCtx);
+                }
+            }, [proxyMode, serverStatus]);
+
+            // Create audio effect nodes
+            const createEffectNodes = (audioContext) => {
+                console.log('Creating effect nodes for audio processing...');
+                
+                // Master gain
+                const masterGain = audioContext.createGain();
+                masterGain.gain.value = 0.8;
+
+                // EQ - Three band
+                const highShelf = audioContext.createBiquadFilter();
+                highShelf.type = 'highshelf';
+                highShelf.frequency.value = 8000;
+
+                const midPeaking = audioContext.createBiquadFilter();
+                midPeaking.type = 'peaking';
+                midPeaking.frequency.value = 1000;
+                midPeaking.Q.value = 1;
+
+                const lowShelf = audioContext.createBiquadFilter();
+                lowShelf.type = 'lowshelf';
+                lowShelf.frequency.value = 200;
+
+                // Flanger
+                const flangerDelay = audioContext.createDelay(0.02);
+                const flangerLFO = audioContext.createOscillator();
+                const flangerDepth = audioContext.createGain();
+                const flangerFeedback = audioContext.createGain();
+                const flangerGain = audioContext.createGain();
+                flangerLFO.frequency.value = 0.5;
+                flangerDepth.gain.value = 0.002;
+                flangerFeedback.gain.value = 0.5;
+                flangerGain.gain.value = 0;
+                flangerLFO.connect(flangerDepth);
+                flangerDepth.connect(flangerDelay.delayTime);
+                flangerDelay.connect(flangerFeedback);
+                flangerFeedback.connect(flangerDelay);
+                flangerLFO.start();
+
+                // Phaser
+                const phaserStages = [];
+                for (let i = 0; i < 4; i++) {
+                    const stage = audioContext.createBiquadFilter();
+                    stage.type = 'allpass';
+                    stage.frequency.value = 1000 + i * 200;
+                    phaserStages.push(stage);
+                }
+                const phaserLFO = audioContext.createOscillator();
+                const phaserDepth = audioContext.createGain();
+                const phaserGain = audioContext.createGain();
+                phaserLFO.frequency.value = 0.3;
+                phaserDepth.gain.value = 500;
+                phaserGain.gain.value = 0;
+                phaserLFO.connect(phaserDepth);
+                phaserStages.forEach(stage => phaserDepth.connect(stage.frequency));
+                phaserLFO.start();
+
+                // Chorus
+                const chorusDelay1 = audioContext.createDelay(0.05);
+                const chorusDelay2 = audioContext.createDelay(0.05);
+                const chorusLFO1 = audioContext.createOscillator();
+                const chorusLFO2 = audioContext.createOscillator();
+                const chorusDepth1 = audioContext.createGain();
+                const chorusDepth2 = audioContext.createGain();
+                const chorusGain = audioContext.createGain();
+                chorusLFO1.frequency.value = 0.7;
+                chorusLFO2.frequency.value = 0.9;
+                chorusDepth1.gain.value = 0.005;
+                chorusDepth2.gain.value = 0.007;
+                chorusGain.gain.value = 0;
+                chorusLFO1.connect(chorusDepth1);
+                chorusLFO2.connect(chorusDepth2);
+                chorusDepth1.connect(chorusDelay1.delayTime);
+                chorusDepth2.connect(chorusDelay2.delayTime);
+                chorusLFO1.start();
+                chorusLFO2.start();
+
+                // Bitcrusher
+                const bitcrusher = audioContext.createWaveShaper();
+                const bitcrusherGain = audioContext.createGain();
+                bitcrusherGain.gain.value = 0;
+
+                // Gate
+                const gateGain = audioContext.createGain();
+                gateGain.gain.value = 1;
+
+                // Auto-Pan
+                const pannerNode = audioContext.createStereoPanner();
+                const panLFO = audioContext.createOscillator();
+                const panDepth = audioContext.createGain();
+                const autoPanGain = audioContext.createGain();
+                panLFO.frequency.value = 2;
+                panDepth.gain.value = 0;
+                autoPanGain.gain.value = 0;
+                panLFO.connect(panDepth);
+                panDepth.connect(pannerNode.pan);
+                panLFO.start();
+
+                // Stutter
+                const stutterDelay = audioContext.createDelay(0.25);
+                const stutterFeedback = audioContext.createGain();
+                const stutterGain = audioContext.createGain();
+                stutterFeedback.gain.value = 0.7;
+                stutterGain.gain.value = 0;
+
+                // Granular Delay
+                const granularDelay1 = audioContext.createDelay(0.1);
+                const granularDelay2 = audioContext.createDelay(0.15);
+                const granularDelay3 = audioContext.createDelay(0.2);
+                const granularGain = audioContext.createGain();
+                granularGain.gain.value = 0;
+
+                // Spectral Filter
+                const spectralFilter = audioContext.createBiquadFilter();
+                spectralFilter.type = 'bandpass';
+                spectralFilter.frequency.value = 1000;
+                spectralFilter.Q.value = 30;
+                const spectralGain = audioContext.createGain();
+                spectralGain.gain.value = 0;
+
+                // Tape Stop
+                const tapeStopGain = audioContext.createGain();
+                tapeStopGain.gain.value = 0;
+
+                // Reverse
+                const reverseGain = audioContext.createGain();
+                reverseGain.gain.value = 0;
+
+                // Beat Repeat
+                const beatRepeatDelay = audioContext.createDelay(0.5);
+                const beatRepeatFeedback = audioContext.createGain();
+                const beatRepeatGain = audioContext.createGain();
+                beatRepeatFeedback.gain.value = 0.8;
+                beatRepeatGain.gain.value = 0;
+
+                // Dry signal path
+                const dryGain = audioContext.createGain();
+                dryGain.gain.value = 1.0;
+
+                console.log('Effect nodes created successfully');
+
+                return {
+                    masterGain, highShelf, midPeaking, lowShelf,
+                    flangerDelay, flangerGain, flangerFeedback,
+                    phaserStages, phaserGain,
+                    chorusDelay1, chorusDelay2, chorusGain,
+                    bitcrusher, bitcrusherGain,
+                    gateGain,
+                    pannerNode, autoPanGain,
+                    stutterDelay, stutterGain, stutterFeedback,
+                    granularDelay1, granularDelay2, granularDelay3, granularGain,
+                    spectralFilter, spectralGain,
+                    tapeStopGain, reverseGain,
+                    beatRepeatDelay, beatRepeatGain, beatRepeatFeedback,
+                    dryGain
+                };
+            };
+
+            // Keyboard controls
+            useEffect(() => {
+                const handleKeyPress = (e) => {
+                    // Crossfader control: 1-9 keys
+                    if (e.key >= '1' && e.key <= '9') {
+                        const keyNum = parseInt(e.key);
+                        const position = ((keyNum - 1) / 8) * 100;
+                        setCrossfader(Math.round(position));
+                        applyCrossfader(Math.round(position));
+                    }
+                    
+                    // Deck controls
+                    if (e.key.toLowerCase() === 'q') {
+                        togglePlayback('left');
+                    } else if (e.key.toLowerCase() === 'e') {
+                        togglePlayback('right');
+                    }
+                };
+
+                document.addEventListener('keydown', handleKeyPress);
+                return () => document.removeEventListener('keydown', handleKeyPress);
+            }, [isPlaying, leftControls, rightControls, crossfader]);
+
+            // YouTube API initialization (fallback mode)
+            useEffect(() => {
+                if (!proxyMode || serverStatus !== 'connected') {
+                    window.onYouTubeIframeAPIReady = () => {
+                        // Initialize left player
+                        leftPlayerRef.current = new YT.Player('left-player', {
+                            height: '200',
+                            width: '100%',
+                            playerVars: {
+                                autoplay: 0,
+                                controls: 1,
+                                modestbranding: 1,
+                                rel: 0
+                            },
+                            events: {
+                                onStateChange: (event) => onPlayerStateChange(event, 'left')
+                            }
+                        });
+
+                        // Initialize right player
+                        rightPlayerRef.current = new YT.Player('right-player', {
+                            height: '200',
+                            width: '100%',
+                            playerVars: {
+                                autoplay: 0,
+                                controls: 1,
+                                modestbranding: 1,
+                                rel: 0
+                            },
+                            events: {
+                                onStateChange: (event) => onPlayerStateChange(event, 'right')
+                            }
+                        });
+                    };
+
+                    if (window.YT && window.YT.Player) {
+                        window.onYouTubeIframeAPIReady();
+                    }
+                }
+            }, [proxyMode, serverStatus]);
+
+            const onPlayerStateChange = (event, side) => {
+                const isCurrentlyPlaying = event.data === YT.PlayerState.PLAYING;
+                setIsPlaying(prev => ({ ...prev, [side]: isCurrentlyPlaying }));
+            };
+
+            const applyVolumeControl = (side, volume) => {
+                if (proxyMode && serverStatus === 'connected') {
+                    const nodes = side === 'left' ? leftNodes : rightNodes;
+                    if (nodes.masterGain) {
+                        nodes.masterGain.gain.value = volume / 100;
+                    }
+                } else {
+                    const player = side === 'left' ? leftPlayerRef.current : rightPlayerRef.current;
+                    if (player && player.setVolume) {
+                        player.setVolume(volume);
+                    }
+                }
+            };
+
+            const applyCrossfader = (position) => {
+                if (proxyMode && serverStatus === 'connected') {
+                    const leftVol = leftControls.volume * (100 - position) / 100;
+                    const rightVol = rightControls.volume * position / 100;
+                    
+                    if (leftNodes.masterGain) leftNodes.masterGain.gain.value = leftVol / 100;
+                    if (rightNodes.masterGain) rightNodes.masterGain.gain.value = rightVol / 100;
+                } else {
+                    if (leftPlayerRef.current && rightPlayerRef.current) {
+                        const leftVol = leftControls.volume * (100 - position) / 100;
+                        const rightVol = rightControls.volume * position / 100;
+                        
+                        leftPlayerRef.current.setVolume && leftPlayerRef.current.setVolume(leftVol);
+                        rightPlayerRef.current.setVolume && rightPlayerRef.current.setVolume(rightVol);
+                    }
+                }
+            };
+
+            const applyPitchControl = (side, pitch) => {
+                if (proxyMode && serverStatus === 'connected') {
+                    const audioElement = side === 'left' ? leftAudioRef.current : rightAudioRef.current;
+                    if (audioElement) {
+                        const rate = 0.5 + (pitch / 100) * 1.5;
+                        audioElement.playbackRate = rate;
+                    }
+                } else {
+                    const player = side === 'left' ? leftPlayerRef.current : rightPlayerRef.current;
+                    if (player && player.setPlaybackRate) {
+                        const rate = 0.25 + (pitch / 100) * 1.75;
+                        player.setPlaybackRate(rate);
+                    }
+                }
+            };
+
+            const applyEQ = (side, eq) => {
+                if (proxyMode && serverStatus === 'connected') {
+                    const nodes = side === 'left' ? leftNodes : rightNodes;
+                    if (nodes.highShelf && nodes.midPeaking && nodes.lowShelf) {
+                        const highGain = (eq.high - 50) * 0.4;
+                        const midGain = (eq.mid - 50) * 0.4;
+                        const lowGain = (eq.low - 50) * 0.4;
+                        
+                        nodes.highShelf.gain.value = highGain;
+                        nodes.midPeaking.gain.value = midGain;
+                        nodes.lowShelf.gain.value = lowGain;
+                    }
+                }
+            };
+
+            const applyEffects = (newEffects) => {
+                if (proxyMode && serverStatus === 'connected') {
+                    [leftNodes, rightNodes].forEach(nodes => {
+                        if (!nodes.masterGain) return;
+                        
+                        // Apply each effect based on its enabled state
+                        if (nodes.flangerGain && effectsEnabled.flanger) {
+                            nodes.flangerGain.gain.value = newEffects.flanger / 100 * 0.5;
+                        }
+                        if (nodes.phaserGain && effectsEnabled.phaser) {
+                            nodes.phaserGain.gain.value = newEffects.phaser / 100 * 0.6;
+                        }
+                        if (nodes.chorusGain && effectsEnabled.chorus) {
+                            nodes.chorusGain.gain.value = newEffects.chorus / 100 * 0.4;
+                        }
+                        if (nodes.bitcrusherGain && effectsEnabled.bitcrusher) {
+                            nodes.bitcrusherGain.gain.value = newEffects.bitcrusher / 100 * 0.7;
+                            const bits = 16 - (newEffects.bitcrusher / 100) * 14;
+                            const curve = new Float32Array(65536);
+                            const step = Math.pow(2, bits - 1);
+                            for (let i = 0; i < 65536; i++) {
+                                const x = (i - 32768) / 32768;
+                                curve[i] = Math.round(x * step) / step;
+                            }
+                            nodes.bitcrusher.curve = curve;
+                        }
+                        if (nodes.gateGain && effectsEnabled.gate) {
+                            nodes.gateGain.gain.value = newEffects.gate / 100;
+                        }
+                        if (nodes.autoPanGain && effectsEnabled.autoPan) {
+                            nodes.autoPanGain.gain.value = newEffects.autoPan / 100;
+                        }
+                        if (nodes.stutterGain && effectsEnabled.stutter) {
+                            nodes.stutterGain.gain.value = newEffects.stutter / 100 * 0.8;
+                        }
+                        if (nodes.granularGain && effectsEnabled.granularDelay) {
+                            nodes.granularGain.gain.value = newEffects.granularDelay / 100 * 0.3;
+                        }
+                        if (nodes.spectralGain && effectsEnabled.spectralFilter) {
+                            nodes.spectralGain.gain.value = newEffects.spectralFilter / 100 * 0.5;
+                            const freq = 200 + (newEffects.spectralFilter / 100) * 8000;
+                            nodes.spectralFilter.frequency.value = freq;
+                        }
+                        if (nodes.tapeStopGain && effectsEnabled.tapeStop) {
+                            nodes.tapeStopGain.gain.value = newEffects.tapeStop / 100;
+                        }
+                        if (nodes.reverseGain && effectsEnabled.reverse) {
+                            nodes.reverseGain.gain.value = newEffects.reverse / 100 * 0.6;
+                        }
+                        if (nodes.beatRepeatGain && effectsEnabled.beatRepeat) {
+                            nodes.beatRepeatGain.gain.value = newEffects.beatRepeat / 100 * 0.7;
+                        }
+                    });
+                }
+                setEffects(newEffects);
+            };
+
+            const toggleEffect = (effectName) => {
+                setEffectsEnabled(prev => ({
+                    ...prev,
+                    [effectName]: !prev[effectName]
+                }));
+            };
+
+            const setupWebAudio = async (side, audioElement) => {
+                try {
+                    const audioContext = side === 'left' ? leftAudioContext : rightAudioContext;
+                    if (!audioContext) return;
+
+                    console.log(`Setting up Web Audio for ${side} deck...`);
+
+                    if (audioContext.state === 'suspended') {
+                        await audioContext.resume();
+                        console.log(`AudioContext resumed for ${side} deck`);
+                    }
+
+                    const source = audioContext.createMediaElementSource(audioElement);
+                    const nodes = createEffectNodes(audioContext);
+                    
+                    // Connect the audio graph
+                    source.connect(nodes.highShelf);
+                    nodes.highShelf.connect(nodes.midPeaking);
+                    nodes.midPeaking.connect(nodes.lowShelf);
+                    
+                    // Connect all effects
+                    nodes.lowShelf.connect(nodes.dryGain);
+                    nodes.lowShelf.connect(nodes.flangerDelay);
+                    nodes.flangerDelay.connect(nodes.flangerGain);
+                    
+                    let phaserChain = nodes.lowShelf;
+                    nodes.phaserStages.forEach(stage => {
+                        phaserChain.connect(stage);
+                        phaserChain = stage;
+                    });
+                    phaserChain.connect(nodes.phaserGain);
+                    
+                    nodes.lowShelf.connect(nodes.chorusDelay1);
+                    nodes.lowShelf.connect(nodes.chorusDelay2);
+                    nodes.chorusDelay1.connect(nodes.chorusGain);
+                    nodes.chorusDelay2.connect(nodes.chorusGain);
+                    
+                    nodes.lowShelf.connect(nodes.bitcrusher);
+                    nodes.bitcrusher.connect(nodes.bitcrusherGain);
+                    
+                    nodes.lowShelf.connect(nodes.gateGain);
+                    
+                    nodes.lowShelf.connect(nodes.pannerNode);
+                    nodes.pannerNode.connect(nodes.autoPanGain);
+                    
+                    nodes.lowShelf.connect(nodes.stutterDelay);
+                    nodes.stutterDelay.connect(nodes.stutterFeedback);
+                    nodes.stutterFeedback.connect(nodes.stutterDelay);
+                    nodes.stutterDelay.connect(nodes.stutterGain);
+                    
+                    nodes.lowShelf.connect(nodes.granularDelay1);
+                    nodes.lowShelf.connect(nodes.granularDelay2);
+                    nodes.lowShelf.connect(nodes.granularDelay3);
+                    nodes.granularDelay1.connect(nodes.granularGain);
+                    nodes.granularDelay2.connect(nodes.granularGain);
+                    nodes.granularDelay3.connect(nodes.granularGain);
+                    
+                    nodes.lowShelf.connect(nodes.spectralFilter);
+                    nodes.spectralFilter.connect(nodes.spectralGain);
+                    
+                    nodes.lowShelf.connect(nodes.tapeStopGain);
+                    nodes.lowShelf.connect(nodes.reverseGain);
+                    
+                    nodes.lowShelf.connect(nodes.beatRepeatDelay);
+                    nodes.beatRepeatDelay.connect(nodes.beatRepeatFeedback);
+                    nodes.beatRepeatFeedback.connect(nodes.beatRepeatDelay);
+                    nodes.beatRepeatDelay.connect(nodes.beatRepeatGain);
+                    
+                    // All to master
+                    nodes.dryGain.connect(nodes.masterGain);
+                    nodes.flangerGain.connect(nodes.masterGain);
+                    nodes.phaserGain.connect(nodes.masterGain);
+                    nodes.chorusGain.connect(nodes.masterGain);
+                    nodes.bitcrusherGain.connect(nodes.masterGain);
+                    nodes.gateGain.connect(nodes.masterGain);
+                    nodes.autoPanGain.connect(nodes.masterGain);
+                    nodes.stutterGain.connect(nodes.masterGain);
+                    nodes.granularGain.connect(nodes.masterGain);
+                    nodes.spectralGain.connect(nodes.masterGain);
+                    nodes.tapeStopGain.connect(nodes.masterGain);
+                    nodes.reverseGain.connect(nodes.masterGain);
+                    nodes.beatRepeatGain.connect(nodes.masterGain);
+                    
+                    nodes.masterGain.connect(audioContext.destination);
+                    
+                    if (side === 'left') {
+                        setLeftNodes(nodes);
+                    } else {
+                        setRightNodes(nodes);
+                    }
+                    
+                    applyEQ(side, side === 'left' ? leftControls : rightControls);
+                    applyEffects(effects);
+                    
+                    console.log(`Web Audio setup complete for ${side} deck`);
+                    
+                } catch (error) {
+                    console.error('Web Audio setup failed:', error);
+                }
+            };
+
+            // Utility functions
+            const extractVideoId = (url) => {
+                const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+                const match = url.match(regex);
+                return match ? match[1] : null;
+            };
+
+            const getAudioUrl = (videoId) => {
+                if (proxyMode && serverStatus === 'connected') {
+                    return `${PROXY_SERVER}/api/youtube-audio?videoId=${videoId}`;
+                }
+                return `https://www.youtube.com/watch?v=${videoId}`;
+            };
+
+            const addToQueue = async (side, url) => {
+                const videoId = extractVideoId(url);
+                if (!videoId) {
+                    alert('Please enter a valid YouTube URL');
+                    return;
+                }
+                
+                const newTrack = {
+                    id: videoId,
+                    url: url,
+                    title: `YouTube Video ${videoId.substring(0, 8)}...`,
+                    thumbnailUrl: `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`
+                };
+                
+                if (side === 'left') {
+                    const newQueue = [...leftQueue, newTrack];
+                    setLeftQueue(newQueue);
+                    if (newQueue.length === 1) {
+                        await loadVideo('left', videoId);
+                    }
+                } else {
+                    const newQueue = [...rightQueue, newTrack];
+                    setRightQueue(newQueue);
+                    if (newQueue.length === 1) {
+                        await loadVideo('right', videoId);
+                    }
+                }
+            };
+
+            const loadVideo = async (side, videoId) => {
+                if (proxyMode && serverStatus === 'connected') {
+                    const audioElement = side === 'left' ? leftAudioRef.current : rightAudioRef.current;
+                    if (audioElement) {
+                        audioElement.src = getAudioUrl(videoId);
+                        audioElement.crossOrigin = "anonymous";
+                        audioElement.load();
+                        
+                        audioElement.addEventListener('canplay', () => {
+                            setupWebAudio(side, audioElement);
+                        }, { once: true });
+                    }
+                } else {
+                    const player = side === 'left' ? leftPlayerRef.current : rightPlayerRef.current;
+                    if (player && player.loadVideoById) {
+                        player.loadVideoById(videoId);
+                    }
+                }
+            };
+
+            const togglePlayback = (side) => {
+                if (proxyMode && serverStatus === 'connected') {
+                    const audioElement = side === 'left' ? leftAudioRef.current : rightAudioRef.current;
+                    const audioContext = side === 'left' ? leftAudioContext : rightAudioContext;
+                    
+                    if (audioElement) {
+                        if (isPlaying[side]) {
+                            audioElement.pause();
+                        } else {
+                            if (audioContext && audioContext.state === 'suspended') {
+                                audioContext.resume().then(() => {
+                                    console.log(`AudioContext resumed for ${side} deck`);
+                                });
+                            }
+                            audioElement.play().catch(error => {
+                                console.error(`Playback failed for ${side} deck:`, error);
+                            });
+                        }
+                        setIsPlaying(prev => ({ ...prev, [side]: !prev[side] }));
+                    }
+                } else {
+                    const player = side === 'left' ? leftPlayerRef.current : rightPlayerRef.current;
+                    if (!player) return;
+                    
+                    if (isPlaying[side]) {
+                        player.pauseVideo();
+                    } else {
+                        player.playVideo();
+                    }
+                }
+            };
+
+            const removeFromQueue = (side, index) => {
+                if (side === 'left') {
+                    const newQueue = leftQueue.filter((_, i) => i !== index);
+                    setLeftQueue(newQueue);
+                } else {
+                    const newQueue = rightQueue.filter((_, i) => i !== index);
+                    setRightQueue(newQueue);
+                }
+            };
+
+            const loadTrack = (side, index) => {
+                const queue = side === 'left' ? leftQueue : rightQueue;
+                if (queue[index]) {
+                    loadVideo(side, queue[index].id);
+                    setCurrentTrack(prev => ({ ...prev, [side]: index }));
+                }
+            };
+
+            // Components
+            const Knob = ({ value, onChange, label, isWorking = false, onValueChange }) => {
+                const angle = (value / 100) * 270 - 135;
+                
+                const handleKnobInteraction = (e) => {
+                    const startY = e.clientY;
+                    const startValue = value;
+                    
+                    const handleDrag = (moveEvent) => {
+                        const deltaY = startY - moveEvent.clientY;
+                        const sensitivity = 0.5;
+                        const newValue = Math.max(0, Math.min(100, startValue + deltaY * sensitivity));
+                        const roundedValue = Math.round(newValue);
+                        onChange(roundedValue);
+                        if (onValueChange) onValueChange(roundedValue);
+                    };
+                    
+                    const handleRelease = () => {
+                        document.removeEventListener('mousemove', handleDrag);
+                        document.removeEventListener('mouseup', handleRelease);
+                    };
+                    
+                    document.addEventListener('mousemove', handleDrag);
+                    document.addEventListener('mouseup', handleRelease);
+                };
+                
+                return (
+                    <div className="flex flex-col items-center space-y-1">
+                        <div 
+                            className={`w-10 h-10 rounded-full border border-gray-300 bg-white relative cursor-pointer shadow-sm select-none hover:bg-gray-50 transition-colors ${
+                                isWorking ? 'ring-2 ring-green-200' : 'ring-2 ring-red-100'
+                            }`}
+                            onMouseDown={handleKnobInteraction}
+                            title={isWorking ? 'Real-time Web Audio effect' : 'Visual control - Limited by API'}
+                        >
+                            <div
+                                className="absolute w-0.5 h-3 bg-black top-1 left-1/2 transform -translate-x-1/2 origin-bottom"
+                                style={{ transform: `translateX(-50%) rotate(${angle}deg)` }}
+                            />
+                        </div>
+                        <span className="text-xs font-mono text-gray-600">{label}</span>
+                        <span className="text-xs font-mono text-gray-400">{value}</span>
+                        {isWorking ? (
+                            <span className="text-xs text-green-600">LIVE</span>
+                        ) : (
+                            <span className="text-xs text-red-400">VIS</span>
+                        )}
+                    </div>
+                );
+            };
+
+            const EffectKnob = ({ effectName, value, enabled, isWorking }) => {
+                return (
+                    <div className="flex flex-col items-center space-y-1">
+                        <button
+                            onClick={() => toggleEffect(effectName)}
+                            className={`w-full py-1 px-2 text-xs font-bold rounded transition-colors ${
+                                enabled ? 'effect-enabled' : 'effect-disabled'
+                            }`}
+                        >
+                            {enabled ? 'ON' : 'OFF'}
+                        </button>
+                        <Knob
+                            value={value}
+                            onChange={(v) => applyEffects({...effects, [effectName]: v})}
+                            label={effectName.toUpperCase()}
+                            isWorking={isWorking && enabled}
+                        />
+                    </div>
+                );
+            };
+
+            const QueueDisplay = ({ queue, side, currentIndex }) => (
+                <div className="bg-gray-100 rounded p-2 mt-2 max-h-32 overflow-y-auto">
+                    <div className="text-xs font-bold mb-1 text-gray-600">QUEUE ({queue.length})</div>
+                    {queue.length === 0 ? (
+                        <div className="text-xs text-gray-400 italic">No tracks</div>
+                    ) : (
+                        queue.map((track, index) => (
+                            <div
+                                key={index}
+                                className={`flex items-center justify-between p-1 rounded text-xs mb-1 cursor-pointer ${
+                                    index === currentIndex ? 'bg-black text-white' : 'bg-white hover:bg-gray-50'
+                                }`}
+                                onClick={() => loadTrack(side, index)}
+                            >
+                                <div className="flex items-center space-x-2">
+                                    <img 
+                                        src={track.thumbnailUrl} 
+                                        alt="thumbnail" 
+                                        className="w-8 h-6 object-cover rounded"
+                                        onError={(e) => e.target.style.display = 'none'}
+                                    />
+                                    <div className="truncate">{track.title}</div>
+                                </div>
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        removeFromQueue(side, index);
+                                    }}
+                                    className="ml-2 p-1 hover:bg-red-500 hover:text-white rounded"
+                                >
+                                    <XIcon />
+                                </button>
+                            </div>
+                        ))
+                    )}
+                </div>
+            );
+
+            const Turntable = ({ side, isPlaying, onToggle }) => (
+                <div className="flex flex-col items-center space-y-2">
+                    <div 
+                        className={`w-16 h-16 rounded-full border-2 border-gray-300 bg-white relative cursor-pointer transition-all duration-300 ${
+                            isPlaying ? 'spinning' : ''
+                        }`}
+                        onClick={onToggle}
+                    >
+                        <div className="absolute inset-2 rounded-full bg-black flex items-center justify-center">
+                            {isPlaying ? <PauseIcon /> : <PlayIcon />}
+                        </div>
+                        <div className="absolute w-1 h-6 bg-red-500 top-0 left-1/2 transform -translate-x-1/2" />
+                    </div>
+                    <span className="text-xs font-mono text-gray-600">{side.toUpperCase()}</span>
+                </div>
+            );
+
+            const effectsWorking = proxyMode && serverStatus === 'connected';
+            
+            // Effect definitions for display
+            const effectDefinitions = [
+                { name: 'flanger', label: 'FLANGER' },
+                { name: 'phaser', label: 'PHASER' },
+                { name: 'chorus', label: 'CHORUS' },
+                { name: 'bitcrusher', label: 'BITCRUSH' },
+                { name: 'gate', label: 'GATE' },
+                { name: 'autoPan', label: 'AUTOPAN' },
+                { name: 'stutter', label: 'STUTTER' },
+                { name: 'granularDelay', label: 'GRANULAR' },
+                { name: 'spectralFilter', label: 'SPECTRAL' },
+                { name: 'tapeStop', label: 'TAPESTOP' },
+                { name: 'reverse', label: 'REVERSE' },
+                { name: 'beatRepeat', label: 'BEATRPT' }
+            ];
+
+            return (
+                <div className="w-full p-4" style={{ minWidth: '1400px' }}>
+                    {/* Header */}
+                    <div className="text-center mb-6">
+                        <h1 className="text-2xl font-bold text-gray-800 mb-2">MIXER//01</h1>
+                        <div className="w-12 h-1 bg-black mx-auto"></div>
+                        
+                        {/* Server Status */}
+                        <div className="mt-4 text-sm">
+                            {serverStatus === 'connected' && (
+                                <div className="text-green-600 font-bold">
+                                    FULL EFFECTS MODE - Real-time audio processing active
+                                </div>
+                            )}
+                            {serverStatus === 'offline' && (
+                                <div className="text-amber-600">
+                                    BASIC MODE - Proxy server offline (start with: npm start)
+                                </div>
+                            )}
+                            {serverStatus === 'error' && (
+                                <div className="text-red-600">
+                                    SERVER ERROR - Check proxy server configuration
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Main Layout */}
+                    <div className="flex gap-6">
+                        {/* DECK A - Left Column */}
+                        <div className="flex-1 space-y-4" style={{ maxWidth: '350px' }}>
+                            <div className={`bg-white rounded-lg p-4 shadow-sm border ${effectsWorking ? 'effects-working' : ''}`}>
+                                <h3 className="text-sm font-bold mb-3 text-center">DECK A</h3>
+                                
+                                {/* Audio Element for Web Audio API */}
+                                {effectsWorking && (
+                                    <audio 
+                                        ref={leftAudioRef}
+                                        className="w-full mb-3"
+                                        controls
+                                        onPlay={() => {
+                                            console.log('Left deck: Audio started playing');
+                                            setIsPlaying(prev => ({ ...prev, left: true }));
+                                        }}
+                                        onPause={() => {
+                                            console.log('Left deck: Audio paused');
+                                            setIsPlaying(prev => ({ ...prev, left: false }));
+                                        }}
+                                        onError={(e) => {
+                                            console.error('Left deck audio error:', e);
+                                        }}
+                                        onLoadStart={() => {
+                                            console.log('Left deck: Started loading audio');
+                                        }}
+                                        onCanPlay={() => {
+                                            console.log('Left deck: Audio can start playing');
+                                        }}
+                                    />
+                                )}
+                                
+                                {/* YouTube Player for fallback */}
+                                {!effectsWorking && (
+                                    <div className="bg-black rounded aspect-video mb-3 relative overflow-hidden">
+                                        <div id="left-player"></div>
+                                    </div>
+                                )}
+                                
+                                {/* URL Input */}
+                                <div className="mb-3">
+                                    <input
+                                        type="text"
+                                        placeholder="Paste YouTube URL + Enter"
+                                        className="w-full px-2 py-1 text-xs border border-gray-300 rounded"
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && e.target.value.trim()) {
+                                                addToQueue('left', e.target.value.trim());
+                                                e.target.value = '';
+                                            }
+                                        }}
+                                    />
+                                </div>
+                                
+                                {/* Queue */}
+                                <QueueDisplay 
+                                    queue={leftQueue} 
+                                    side="left" 
+                                    currentIndex={currentTrack.left}
+                                />
+                            </div>
+
+                            {/* Left Controls */}
+                            <div className="bg-white rounded-lg p-4 shadow-sm border">
+                                <div className="grid grid-cols-3 gap-4 mb-4">
+                                    <Knob
+                                        value={leftControls.high}
+                                        onChange={(v) => setLeftControls({...leftControls, high: v})}
+                                        onValueChange={(v) => applyEQ('left', {...leftControls, high: v})}
+                                        label="HIGH"
+                                        isWorking={effectsWorking}
+                                    />
+                                    <Knob
+                                        value={leftControls.mid}
+                                        onChange={(v) => setLeftControls({...leftControls, mid: v})}
+                                        onValueChange={(v) => applyEQ('left', {...leftControls, mid: v})}
+                                        label="MID"
+                                        isWorking={effectsWorking}
+                                    />
+                                    <Knob
+                                        value={leftControls.low}
+                                        onChange={(v) => setLeftControls({...leftControls, low: v})}
+                                        onValueChange={(v) => applyEQ('left', {...leftControls, low: v})}
+                                        label="LOW"
+                                        isWorking={effectsWorking}
+                                    />
+                                </div>
+                                
+                                <div className="space-y-3">
+                                    <div className="flex items-center space-x-2">
+                                        <span className="text-xs font-mono text-gray-600 w-12">VOL</span>
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max="100"
+                                            value={leftControls.volume}
+                                            onChange={(e) => {
+                                                const vol = parseInt(e.target.value);
+                                                setLeftControls({...leftControls, volume: vol});
+                                                applyVolumeControl('left', vol);
+                                                applyCrossfader(crossfader);
+                                            }}
+                                            className="slider flex-1"
+                                        />
+                                        <span className="text-xs font-mono text-gray-400 w-8">{leftControls.volume}</span>
+                                        <span className="text-xs text-green-600">●</span>
+                                    </div>
+                                    <div className="flex items-center space-x-2">
+                                        <span className="text-xs font-mono text-gray-600 w-12">PITCH</span>
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max="100"
+                                            value={leftControls.pitch}
+                                            onChange={(e) => {
+                                                const pitch = parseInt(e.target.value);
+                                                setLeftControls({...leftControls, pitch: pitch});
+                                                applyPitchControl('left', pitch);
+                                            }}
+                                            className="slider flex-1"
+                                        />
+                                        <span className="text-xs font-mono text-gray-400 w-8">{leftControls.pitch}</span>
+                                        <span className="text-xs text-green-600">●</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Left Turntable */}
+                            <div className="flex justify-center">
+                                <Turntable
+                                    side="left"
+                                    isPlaying={isPlaying.left}
+                                    onToggle={() => togglePlayback('left')}
+                                />
+                            </div>
+                        </div>
+
+                        {/* Center Effects & Crossfader - Middle Column */}
+                        <div className="flex-1 space-y-6">
+                            <div className={`bg-white rounded-lg p-6 shadow-sm border ${effectsWorking ? 'effects-working' : ''}`}>
+                                <h3 className="text-lg font-bold mb-6 text-center">
+                                    {effectsWorking ? 'LIVE EFFECTS' : 'EFFECTS (VISUAL)'}
+                                </h3>
+                                
+                                {/* Effects Grid - 3 columns x 4 rows */}
+                                <div className="grid grid-cols-3 gap-6 mb-8">
+                                    {effectDefinitions.map((effect) => (
+                                        <EffectKnob
+                                            key={effect.name}
+                                            effectName={effect.name}
+                                            value={effects[effect.name]}
+                                            enabled={effectsEnabled[effect.name]}
+                                            isWorking={effectsWorking}
+                                        />
+                                    ))}
+                                </div>
+                                
+                                {/* Crossfader */}
+                                <div className="mt-8">
+                                    <div className="text-center mb-3">
+                                        <span className="text-sm font-bold text-gray-600">CROSSFADER</span>
+                                    </div>
+                                    <div className="flex items-center space-x-3">
+                                        <span className="text-sm text-gray-600 font-bold">A</span>
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max="100"
+                                            value={crossfader}
+                                            onChange={(e) => {
+                                                const pos = parseInt(e.target.value);
+                                                setCrossfader(pos);
+                                                applyCrossfader(pos);
+                                            }}
+                                            className="slider flex-1"
+                                        />
+                                        <span className="text-sm text-gray-600 font-bold">B</span>
+                                        <span className="text-xs text-green-600">●</span>
+                                    </div>
+                                    <div className="text-center mt-2">
+                                        <span className="text-sm font-mono text-gray-400">{crossfader}%</span>
+                                    </div>
+                                </div>
+                                
+                                {/* Keyboard Controls Info */}
+                                <div className="bg-gray-100 p-4 rounded text-xs space-y-2 mt-6">
+                                    <div className="text-center font-bold text-gray-700 mb-3">KEYBOARD CONTROLS</div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <div className="font-bold text-gray-600">CROSSFADER:</div>
+                                            <div className="text-gray-500">1-9 keys</div>
+                                            <div className="text-gray-400 text-xs">1=12.5%, 5=50%, 9=87.5%</div>
+                                        </div>
+                                        <div>
+                                            <div className="font-bold text-gray-600">DECKS:</div>
+                                            <div className="text-gray-500">Q = Deck A</div>
+                                            <div className="text-gray-500">E = Deck B</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                {/* Sync Button */}
+                                <button 
+                                    className="w-full mt-6 py-3 bg-black text-white text-sm font-bold rounded hover:bg-gray-800 transition-colors"
+                                    onClick={() => {
+                                        setLeftControls(prev => ({...prev, pitch: 50}));
+                                        setRightControls(prev => ({...prev, pitch: 50}));
+                                        applyPitchControl('left', 50);
+                                        applyPitchControl('right', 50);
+                                        alert('BPM SYNC: Both tracks set to normal speed (1.0x)');
+                                    }}
+                                >
+                                    SYNC
+                                </button>
+
+                                {/* Test Effects Button */}
+                                {effectsWorking && (
+                                    <button 
+                                        className="w-full mt-3 py-2 bg-green-600 text-white text-xs font-bold rounded hover:bg-green-700 transition-colors"
+                                        onClick={() => {
+                                            const testEffects = { flanger: 30, phaser: 25, chorus: 40 };
+                                            applyEffects({...effects, ...testEffects});
+                                            setTimeout(() => {
+                                                applyEffects({...effects, flanger: 0, phaser: 0, chorus: 0});
+                                            }, 2000);
+                                        }}
+                                    >
+                                        TEST ALL EFFECTS
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* DECK B - Right Column */}
+                        <div className="flex-1 space-y-4" style={{ maxWidth: '350px' }}>
+                            <div className={`bg-white rounded-lg p-4 shadow-sm border ${effectsWorking ? 'effects-working' : ''}`}>
+                                <h3 className="text-sm font-bold mb-3 text-center">DECK B</h3>
+                                
+                                {/* Audio Element for Web Audio API */}
+                                {effectsWorking && (
+                                    <audio 
+                                        ref={rightAudioRef}
+                                        className="w-full mb-3"
+                                        controls
+                                        onPlay={() => {
+                                            console.log('Right deck: Audio started playing');
+                                            setIsPlaying(prev => ({ ...prev, right: true }));
+                                        }}
+                                        onPause={() => {
+                                            console.log('Right deck: Audio paused');
+                                            setIsPlaying(prev => ({ ...prev, right: false }));
+                                        }}
+                                        onError={(e) => {
+                                            console.error('Right deck audio error:', e);
+                                        }}
+                                        onLoadStart={() => {
+                                            console.log('Right deck: Started loading audio');
+                                        }}
+                                        onCanPlay={() => {
+                                            console.log('Right deck: Audio can start playing');
+                                        }}
+                                    />
+                                )}
+                                
+                                {/* YouTube Player for fallback */}
+                                {!effectsWorking && (
+                                    <div className="bg-black rounded aspect-video mb-3 relative overflow-hidden">
+                                        <div id="right-player"></div>
+                                    </div>
+                                )}
+                                
+                                {/* URL Input */}
+                                <div className="mb-3">
+                                    <input
+                                        type="text"
+                                        placeholder="Paste YouTube URL + Enter"
+                                        className="w-full px-2 py-1 text-xs border border-gray-300 rounded"
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && e.target.value.trim()) {
+                                                addToQueue('right', e.target.value.trim());
+                                                e.target.value = '';
+                                            }
+                                        }}
+                                    />
+                                </div>
+                                
+                                {/* Queue */}
+                                <QueueDisplay 
+                                    queue={rightQueue} 
+                                    side="right" 
+                                    currentIndex={currentTrack.right}
+                                />
+                            </div>
+
+                            {/* Right Controls */}
+                            <div className="bg-white rounded-lg p-4 shadow-sm border">
+                                <div className="grid grid-cols-3 gap-4 mb-4">
+                                    <Knob
+                                        value={rightControls.high}
+                                        onChange={(v) => setRightControls({...rightControls, high: v})}
+                                        onValueChange={(v) => applyEQ('right', {...rightControls, high: v})}
+                                        label="HIGH"
+                                        isWorking={effectsWorking}
+                                    />
+                                    <Knob
+                                        value={rightControls.mid}
+                                        onChange={(v) => setRightControls({...rightControls, mid: v})}
+                                        onValueChange={(v) => applyEQ('right', {...rightControls, mid: v})}
+                                        label="MID"
+                                        isWorking={effectsWorking}
+                                    />
+                                    <Knob
+                                        value={rightControls.low}
+                                        onChange={(v) => setRightControls({...rightControls, low: v})}
+                                        onValueChange={(v) => applyEQ('right', {...rightControls, low: v})}
+                                        label="LOW"
+                                        isWorking={effectsWorking}
+                                    />
+                                </div>
+                                
+                                <div className="space-y-3">
+                                    <div className="flex items-center space-x-2">
+                                        <span className="text-xs font-mono text-gray-600 w-12">VOL</span>
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max="100"
+                                            value={rightControls.volume}
+                                            onChange={(e) => {
+                                                const vol = parseInt(e.target.value);
+                                                setRightControls({...rightControls, volume: vol});
+                                                applyVolumeControl('right', vol);
+                                                applyCrossfader(crossfader);
+                                            }}
+                                            className="slider flex-1"
+                                        />
+                                        <span className="text-xs font-mono text-gray-400 w-8">{rightControls.volume}</span>
+                                        <span className="text-xs text-green-600">●</span>
+                                    </div>
+                                    <div className="flex items-center space-x-2">
+                                        <span className="text-xs font-mono text-gray-600 w-12">PITCH</span>
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max="100"
+                                            value={rightControls.pitch}
+                                            onChange={(e) => {
+                                                const pitch = parseInt(e.target.value);
+                                                setRightControls({...rightControls, pitch: pitch});
+                                                applyPitchControl('right', pitch);
+                                            }}
+                                            className="slider flex-1"
+                                        />
+                                        <span className="text-xs font-mono text-gray-400 w-8">{rightControls.pitch}</span>
+                                        <span className="text-xs text-green-600">●</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Right Turntable */}
+                            <div className="flex justify-center">
+                                <Turntable
+                                    side="right"
+                                    isPlaying={isPlaying.right}
+                                    onToggle={() => togglePlayback('right')}
+                                />
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {/* Status Bar */}
+                    <div className="mt-6 bg-black text-white p-3 rounded text-center">
+                        <div className="grid grid-cols-3 text-sm font-mono">
+                            <div>DECK A: {isPlaying.left ? 'PLAYING' : 'STOPPED'}</div>
+                            <div>CROSSFADER: {crossfader}%</div>
+                            <div>DECK B: {isPlaying.right ? 'PLAYING' : 'STOPPED'}</div>
+                        </div>
+                    </div>
+
+                    {/* Control Legend */}
+                    <div className="mt-4 bg-gray-100 p-3 rounded text-xs text-center">
+                        {effectsWorking ? (
+                            <div>
+                                <span className="text-green-600">LIVE</span> = Real-time Web Audio effects active | 
+                                <span className="text-green-600 ml-2">PITCH</span> = Playback rate control available |
+                                <span className="text-blue-600 ml-2">SERVER</span> = Proxy server connected
+                            </div>
+                        ) : (
+                            <div>
+                                <span className="text-green-600">LIVE</span> = Basic YouTube controls | 
+                                <span className="text-red-400 ml-2">VIS</span> = Visual only (YouTube API limitations) |
+                                <span className="text-amber-600 ml-2">OFFLINE</span> = Start proxy server for full effects
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Quick Start Guide */}
+                    {serverStatus === 'offline' && (
+                        <div className="mt-4 bg-blue-50 border border-blue-200 p-4 rounded">
+                            <h4 className="font-bold text-blue-800 mb-2">Enable Full Effects Mode:</h4>
+                            <ol className="text-sm text-blue-700 space-y-1">
+                                <li>1. Open terminal in your server directory</li>
+                                <li>2. Run: <code className="bg-blue-100 px-1 rounded">npm start</code></li>
+                                <li>3. Refresh this page</li>
+                                <li>4. Enjoy real-time audio effects!</li>
+                            </ol>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        ReactDOM.render(<YouTubeDJMixer />, document.getElementById('root'));
+    </script>
+</body>
+</html>

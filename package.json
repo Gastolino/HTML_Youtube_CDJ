@@ -1,5 +1,20 @@
 {
+  "name": "html-youtube-cdj",
+  "version": "1.0.0",
+  "description": "Professional YouTube DJ Mixer with Real-time Effects",
+  "main": "api/youtube-audio.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo 'Static site - no build needed'",
+    "start": "vercel --prod"
+  },
   "dependencies": {
-    "youtube-dl-exec": "^3.0.24"
-  }
+    "youtube-dl-exec": "^2.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["dj", "mixer", "youtube", "audio", "effects", "web-audio"],
+  "author": "Gastolino",
+  "license": "MIT"
 }
