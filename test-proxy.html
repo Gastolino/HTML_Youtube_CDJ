@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proxy Test - DJ Mixer</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            padding: 20px; 
+            max-width: 800px; 
+            margin: 0 auto;
+        }
+        .status { 
+            padding: 15px; 
+            margin: 10px 0; 
+            border-radius: 8px; 
+            font-weight: bold;
+        }
+        .success { 
+            background: #d4edda; 
+            border: 2px solid #c3e6cb; 
+            color: #155724;
+        }
+        .error { 
+            background: #f8d7da; 
+            border: 2px solid #f5c6cb; 
+            color: #721c24;
+        }
+        button { 
+            padding: 12px 24px; 
+            margin: 8px; 
+            cursor: pointer; 
+            border: none;
+            border-radius: 6px;
+            background: #007bff;
+            color: white;
+            font-size: 14px;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+        input { 
+            padding: 8px; 
+            margin: 8px; 
+            width: 300px; 
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .results {
+            margin-top: 20px; 
+            font-family: 'Courier New', monospace; 
+            background: #f8f9fa; 
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #dee2e6;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            background: white;
+        }
+        .audio-controls {
+            margin-top: 15px;
+            padding: 10px;
+            background: #e9ecef;
+            border-radius: 6px;
+            display: none;
+        }
+        .effect-button {
+            background: #28a745;
+        }
+        .effect-button:hover {
+            background: #218838;
+        }
+        .effect-button.active {
+            background: #dc3545;
+        }
+        .effect-button.active:hover {
+            background: #c82333;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎧 YouTube DJ Mixer - Proxy Test</h1>
+    
+    <div id="status" class="status">Ready to test proxy server integration...</div>
+    
+    <div class="test-section">
+        <h3>1. 🔗 Test Server Connection</h3>
+        <p>First, let's make sure your proxy server is running and responding.</p>
+        <button onclick="testServerHealth()">Test Server Health</button>
+    </div>
+    
+    <div class="test-section">
+        <h3>2. 📋 Test Video Info</h3>
+        <p>Test getting basic information about a YouTube video.</p>
+        <input type="text" id="videoId" placeholder="Enter YouTube Video ID" value="dQw4w9WgXcQ">
+        <button onclick="testVideoInfo()">Get Video Info</button>
+    </div>
+    
+    <div class="test-section">
+        <h3>3. 🎵 Test Audio Endpoint</h3>
+        <p>Test the audio endpoint (currently returns info, will stream audio later).</p>
+        <button onclick="testAudioEndpoint()">Test Audio Endpoint</button>
+    </div>
+    
+    <div class="test-section">
+        <h3>4. 🔊 Test Web Audio API & Effects</h3>
+        <p>Test Web Audio API with real-time effects to verify everything works.</p>
+        <button onclick="testWebAudio()">Initialize Web Audio Effects</button>
+        
+        <div id="audioControls" class="audio-controls">
+            <h4>🎛️ Audio Controls</h4>
+            <button onclick="playTestAudio()">▶️ Play</button>
+            <button onclick="pauseTestAudio()">⏸️ Pause</button>
+            <button id="reverbButton" class="effect-button" onclick="toggleReverb()">🎛️ Toggle Reverb Effect</button>
+            <button onclick="toggleDelay()">⏱️ Toggle Delay Effect</button>
+            <br><br>
+            <label>Master Volume: </label>
+            <input type="range" id="volumeSlider" min="0" max="100" value="50" onchange="adjustVolume(this.value)">
+            <span id="volumeDisplay">50%</span>
+        </div>
+    </div>
+    
+    <div class="results" id="results">
+        Test results will appear here...
+    </div>
+    
+    <script>
+        const SERVER_URL = 'http://localhost:3000';
+        let testAudio = null;
+        let audioContext = null;
+        let audioSource = null;
+        let reverbNode = null;
+        let delayNode = null;
+        let masterGain = null;
+        let isReverbOn = false;
+        let isDelayOn = false;
+        
+        function updateStatus(message, isError = false) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${isError ? 'error' : 'success'}`;
+        }
+        
+        function updateResults(data) {
+            const results = document.getElementById('results');
+            if (typeof data === 'string') {
+                results.textContent = data;
+            } else {
+                results.textContent = JSON.stringify(data, null, 2);
+            }
+        }
+        
+        async function testServerHealth() {
+            try {
+                updateStatus('🔄 Testing server connection...');
+                
+                const response = await fetch(`${SERVER_URL}/`);
+                const data = await response.json();
+                
+                updateStatus('✅ Server is healthy and responding!');
+                updateResults({
+                    status: 'SUCCESS',
+                    message: 'Proxy server is running correctly',
+                    serverResponse: data,
+                    timestamp: new Date().toISOString()
+                });
+                
+            } catch (error) {
+                updateStatus('❌ Server connection failed: ' + error.message, true);
+                updateResults({
+                    status: 'ERROR',
+                    error: error.message,
+                    suggestion: 'Make sure your server is running with: npm start'
+                });
+            }
+        }
+        
+        async function testVideoInfo() {
+            try {
+                const videoId = document.getElementById('videoId').value.trim();
+                if (!videoId) {
+                    updateStatus('❌ Please enter a video ID', true);
+                    return;
+                }
+                
+                updateStatus('🔄 Getting video information...');
+                
+                const response = await fetch(`${SERVER_URL}/api/youtube-info/${videoId}`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    updateStatus('✅ Video info retrieved successfully!');
+                    updateResults({
+                        status: 'SUCCESS',
+                        message: 'Video information endpoint working',
+                        videoData: data
+                    });
+                } else {
+                    updateStatus('❌ Failed to get video info', true);
+                    updateResults(data);
+                }
+                
+            } catch (error) {
+                updateStatus('❌ Error: ' + error.message, true);
+                updateResults({ error: error.message });
+            }
+        }
+        
+        async function testAudioEndpoint() {
+            try {
+                const videoId = document.getElementById('videoId').value.trim() || 'dQw4w9WgXcQ';
+                updateStatus('🔄 Testing audio endpoint...');
+                
+                const response = await fetch(`${SERVER_URL}/api/youtube-audio/${videoId}`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    updateStatus('✅ Audio endpoint responding correctly!');
+                    updateResults({
+                        status: 'SUCCESS',
+                        message: 'Audio endpoint is ready for streaming implementation',
+                        endpointResponse: data
+                    });
+                } else {
+                    updateStatus('❌ Audio endpoint error', true);
+                    updateResults(data);
+                }
+                
+            } catch (error) {
+                updateStatus('❌ Error: ' + error.message, true);
+                updateResults({ error: error.message });
+            }
+        }
+        
+        async function testWebAudio() {
+            try {
+                updateStatus('🔄 Initializing Web Audio API...');
+                
+                // Create audio context
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Try multiple test audio sources
+                const testSources = [
+                    `${SERVER_URL}/api/test-tone`,
+                    `${SERVER_URL}/api/test-audio`,
+                    'https://www.soundjay.com/misc/sounds/bell-ringing-05.wav',
+                    'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+LyvmMeAjyX2u++ejoFk3vJ9duORBEINGS4+u3sVRAYV6lsw55VGgWEoNvhrmcqBzuJ8t6YUBULMHbO89qAOwkQXKzYw89kIAY0jJLRKNKGWxpBnNjOaVAaB4qM8t+YUBANNHLGod68f0obCrCbMwlkONOUgA==' // Short base64 WAV
+                ];
+                
+                let audioLoaded = false;
+                
+                for (let i = 0; i < testSources.length && !audioLoaded; i++) {
+                    try {
+                        testAudio = new Audio();
+                        testAudio.crossOrigin = "anonymous";
+                        testAudio.src = testSources[i];
+                        
+                        await new Promise((resolve, reject) => {
+                            const timeout = setTimeout(() => {
+                                reject(new Error('Audio load timeout'));
+                            }, 5000);
+                            
+                            testAudio.addEventListener('canplaythrough', () => {
+                                clearTimeout(timeout);
+                                audioLoaded = true;
+                                resolve();
+                            });
+                            
+                            testAudio.addEventListener('error', () => {
+                                clearTimeout(timeout);
+                                reject(new Error('Audio load failed'));
+                            });
+                            
+                            testAudio.load();
+                        });
+                        
+                        updateStatus(`✅ Test audio loaded from source ${i + 1}`);
+                        break;
+                        
+                    } catch (sourceError) {
+                        console.log(`Source ${i + 1} failed:`, sourceError.message);
+                        continue;
+                    }
+                }
+                
+                if (!audioLoaded) {
+                    throw new Error('All audio sources failed to load');
+                }
+                
+                // Create Web Audio nodes
+                audioSource = audioContext.createMediaElementSource(testAudio);
+                
+                // Create master gain
+                masterGain = audioContext.createGain();
+                masterGain.gain.value = 0.5;
+                
+                // Create reverb effect
+                reverbNode = audioContext.createConvolver();
+                const impulseBuffer = createImpulseResponse(audioContext, 2, 0.5);
+                reverbNode.buffer = impulseBuffer;
+                
+                // Create delay effect
+                delayNode = audioContext.createDelay(1.0);
+                delayNode.delayTime.value = 0.3;
+                const delayFeedback = audioContext.createGain();
+                delayFeedback.gain.value = 0.3;
+                
+                // Create gain nodes for dry/wet mixing
+                const dryGain = audioContext.createGain();
+                const reverbGain = audioContext.createGain();
+                const delayGain = audioContext.createGain();
+                
+                // Set up delay feedback loop
+                delayNode.connect(delayFeedback);
+                delayFeedback.connect(delayNode);
+                
+                // Connect audio graph
+                audioSource.connect(dryGain);
+                audioSource.connect(reverbNode);
+                audioSource.connect(delayNode);
+                
+                dryGain.connect(masterGain);
+                reverbNode.connect(reverbGain);
+                delayNode.connect(delayGain);
+                
+                reverbGain.connect(masterGain);
+                delayGain.connect(masterGain);
+                masterGain.connect(audioContext.destination);
+                
+                // Store references for later use
+                window.dryGain = dryGain;
+                window.reverbGain = reverbGain;
+                window.delayGain = delayGain;
+                window.masterGain = masterGain;
+                
+                // Initial settings
+                dryGain.gain.value = 1.0;      // Full dry signal
+                reverbGain.gain.value = 0.0;   // No reverb initially
+                delayGain.gain.value = 0.0;    // No delay initially
+                
+                updateStatus('✅ Web Audio API ready! Effects system working!');
+                updateResults({
+                    status: 'SUCCESS',
+                    message: 'Web Audio API with multiple effects ready to test',
+                    audioContext: `Created (Sample Rate: ${audioContext.sampleRate}Hz)`,
+                    effects: 'Reverb and Delay nodes connected and ready',
+                    audioSource: 'Connected to MediaElementSource',
+                    note: 'Click Play to test, then toggle effects to hear the difference!'
+                });
+                
+                // Show audio controls
+                document.getElementById('audioControls').style.display = 'block';
+                
+            } catch (error) {
+                updateStatus('❌ Web Audio test failed: ' + error.message, true);
+                updateResults({ 
+                    error: error.message,
+                    troubleshooting: 'Try running the server and testing again. Web Audio API requires user interaction.'
+                });
+            }
+        }
+        
+        function createImpulseResponse(audioContext, duration, decay) {
+            const sampleRate = audioContext.sampleRate;
+            const length = sampleRate * duration;
+            const impulse = audioContext.createBuffer(2, length, sampleRate);
+            
+            for (let channel = 0; channel < 2; channel++) {
+                const channelData = impulse.getChannelData(channel);
+                for (let i = 0; i < length; i++) {
+                    channelData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+                }
+            }
+            
+            return impulse;
+        }
+        
+        function playTestAudio() {
+            if (testAudio && audioContext) {
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+                testAudio.play();
+                updateStatus('🎵 Playing test audio with Web Audio effects enabled!');
+            } else {
+                updateStatus('❌ Initialize Web Audio first!', true);
+            }
+        }
+        
+        function pauseTestAudio() {
+            if (testAudio) {
+                testAudio.pause();
+                updateStatus('⏸️ Audio paused');
+            }
+        }
+        
+        function toggleReverb() {
+            if (!window.reverbGain) {
+                updateStatus('❌ Audio effects not initialized', true);
+                return;
+            }
+            
+            isReverbOn = !isReverbOn;
+            const button = document.getElementById('reverbButton');
+            
+            if (isReverbOn) {
+                window.reverbGain.gain.value = 0.4;
+                button.textContent = '🎛️ Reverb ON';
+                button.classList.add('active');
+                updateStatus('🎛️ Reverb effect ON - You should hear echo/space!');
+            } else {
+                window.reverbGain.gain.value = 0.0;
+                button.textContent = '🎛️ Reverb OFF';
+                button.classList.remove('active');
+                updateStatus('🎛️ Reverb effect OFF - Clean sound');
+            }
+            
+            updateResults({
+                reverbStatus: isReverbOn ? 'ON' : 'OFF',
+                reverbGain: window.reverbGain.gain.value,
+                message: 'Reverb effect toggle successful!'
+            });
+        }
+        
+        function toggleDelay() {
+            if (!window.delayGain) {
+                updateStatus('❌ Audio effects not initialized', true);
+                return;
+            }
+            
+            isDelayOn = !isDelayOn;
+            
+            if (isDelayOn) {
+                window.delayGain.gain.value = 0.3;
+                updateStatus('⏱️ Delay effect ON - You should hear echoes!');
+            } else {
+                window.delayGain.gain.value = 0.0;
+                updateStatus('⏱️ Delay effect OFF');
+            }
+            
+            updateResults({
+                delayStatus: isDelayOn ? 'ON' : 'OFF',
+                delayGain: window.delayGain.gain.value,
+                message: 'Delay effect toggle successful!'
+            });
+        }
+        
+        function adjustVolume(value) {
+            if (window.masterGain) {
+                window.masterGain.gain.value = value / 100;
+                document.getElementById('volumeDisplay').textContent = value + '%';
+                updateStatus(`🔊 Master volume set to ${value}%`);
+            }
+        }
+        
+        // Auto-test on page load
+        window.addEventListener('load', () => {
+            updateResults('🚀 Ready to test proxy server integration!\n\nClick "Test Server Health" to begin...');
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "youtube-dl-exec": "^3.0.24"
+  }
+}
