@@ -130,21 +130,30 @@
 
             // Test proxy server connection on startup
             useEffect(() => {
-                const testConnection = async () => {
-                    try {
-                        const response = await fetch(`${PROXY_SERVER}/`);
-                        if (response.ok) {
-                            setServerStatus('connected');
-                        } else {
-                            setServerStatus('error');
-                        }
-                    } catch (error) {
-                        setServerStatus('offline');
-                        console.warn('Proxy server offline, using basic mode');
-                    }
-                };
-                testConnection();
-            }, []);
+                  const testConnection = async () => {
+                       try {
+                            console.log('Testing connection to:', PROXY_SERVER);
+                            const response = await fetch(`${PROXY_SERVER}/api/youtube-audio?videoId=test`);
+                            console.log('Test response status:', response.status);
+            
+                             if (response.status === 400) { 
+                               // Expected response for test call
+                                 setServerStatus('connected');
+                                 console.log('✅ Server is connected and responding');
+                             } else if (response.ok) {
+                                 setServerStatus('connected');
+                                 console.log('✅ Server is connected');
+                             } else {
+                                 setServerStatus('error');
+                                 console.log('❌ Server error:', response.status);
+                             }
+                         } catch (error) {
+                             setServerStatus('offline');
+                             console.log('❌ Server offline:', error.message);
+        }
+    };
+    testConnection();
+}, []);
 
             // Initialize Audio Contexts for Web Audio API
             useEffect(() => {
